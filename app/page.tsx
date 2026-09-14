@@ -35,7 +35,8 @@ import {
   Check,
   Save,
   Bot,
-  PhoneOff
+  PhoneOff,
+  Network
 } from 'lucide-react';
 import VoiceButton from '@/components/VoiceButton';
 import { AgentInfo } from '@/lib/types';
@@ -893,6 +894,92 @@ export default function MissionControlHome() {
               </div>
               <div className="text-[10px] text-emerald-400 mt-2 font-mono">
                 Zero-Telegram conflict isolated
+              </div>
+            </div>
+          </div>
+
+          {/* Obsidian Memory Landscape & Graphical Visualizers Hub */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Card 1: 3D Obsidian Vault & Hive Mind Globe */}
+            <div className="glass-card p-5 rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-[#04081c] to-[#010207] relative overflow-hidden group hover:border-cyan-400/60 transition-all shadow-[0_0_25px_rgba(6,182,212,0.15)]">
+              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none">
+                <Globe className="w-32 h-32 text-cyan-400" />
+              </div>
+              <div className="relative z-10 flex flex-col h-full justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.3)]">
+                      <Globe className="w-4 h-4 animate-pulse" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        3D Obsidian Vault & Hive Mind Globe
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/50 uppercase">
+                          ULTRON GESTURES
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-gray-400 font-mono">2,800 Fibonacci Memory Particles • 8 Agent Satellites</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-300 mb-4 leading-relaxed font-mono">
+                    Fullstack 3D WebGL spherical topology with webcam MediaPipe hand gesture tracking (single-hand pinch to spin, two-hand pinch to zoom) and holographic bloom post-processing.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 pt-3 border-t border-cyan-950/80">
+                  <Link
+                    href="/globe"
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-mono text-xs font-bold shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all"
+                  >
+                    <span>Launch 3D Vault Globe</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                  <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2.5 py-2 rounded-xl border border-cyan-800/40">
+                    Hotkeys: G, B, R
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 2: 2D Obsidian Memory Topology Graph */}
+            <div className="glass-card p-5 rounded-2xl border border-purple-500/30 bg-gradient-to-br from-[#09051c] to-[#020107] relative overflow-hidden group hover:border-purple-400/60 transition-all shadow-[0_0_25px_rgba(168,85,247,0.15)]">
+              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none">
+                <Network className="w-32 h-32 text-purple-400" />
+              </div>
+              <div className="relative z-10 flex flex-col h-full justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-xl bg-purple-950/80 border border-purple-500/40 flex items-center justify-center text-purple-300 shadow-[0_0_10px_rgba(168,85,247,0.3)]">
+                      <Network className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        Obsidian 2D Memory Topology Graph
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-700/50 uppercase">
+                          FORCE-DIRECTED
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-gray-400 font-mono">Clustered by Chats, Daily Notes, Goals & Sessions</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-300 mb-4 leading-relaxed font-mono">
+                    Interactive canvas graph view mirroring Obsidian native second-brain topology. Drag nodes, filter categories, inspect metadata tooltips, and click any node to read rendered markdown.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 pt-3 border-t border-purple-950/80">
+                  <Link
+                    href="/vault?view=graph"
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-mono text-xs font-bold shadow-[0_0_15px_rgba(168,85,247,0.4)] transition-all"
+                  >
+                    <span>Open Memory Graph View</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                  <Link
+                    href="/vault"
+                    className="text-[10px] font-mono text-purple-300 hover:text-white bg-purple-950/60 px-3 py-2 rounded-xl border border-purple-800/40 transition"
+                  >
+                    Reader Mode
+                  </Link>
+                </div>
               </div>
             </div>
           </div>

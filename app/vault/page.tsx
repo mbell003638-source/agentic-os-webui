@@ -14,7 +14,15 @@ import {
   Globe,
   Network,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Maximize2,
+  Minimize2,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Sparkles,
+  Layers,
+  FolderSync
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -29,16 +37,18 @@ interface VaultItem {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  chats: '#22d3ee',
-  notes: '#a78bfa',
-  goals: '#fbbf24',
-  sessions: '#34d399',
-  default: '#60a5fa'
+  chats: '#22d3ee',     // Cyan
+  notes: '#a78bfa',     // Purple
+  journal: '#818cf8',   // Indigo
+  goals: '#fbbf24',     // Amber
+  sessions: '#34d399',  // Emerald
+  default: '#60a5fa'    // Sky blue
 };
 
 const CATEGORY_ICONS: Record<string, string> = {
   chats: '💬',
   notes: '📝',
+  journal: '📓',
   goals: '🎯',
   sessions: '🔄',
   default: '📄'
@@ -53,10 +63,28 @@ function getCategoryIcon(cat: string) {
 }
 
 // ----------------------------------------------------
-// Graph View Component
+// Interactive Force-Directed 2D Note Graph Component
 // ----------------------------------------------------
-function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode: (relPath: string) => void }) {
+function ForceGraph({ 
+  items, 
+  onSelectNode,
+  searchQuery,
+  filterCategory
+}: { 
+  items: VaultItem[];
+  onSelectNode: (relPath: string) => void;
+  searchQuery: string;
+  filterCategory: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [hoveredNode, setHoveredNode] = useState<any | null>(null);
+  const transformRef = useRef({ x: 0, y: 0, k: 1 });
+
+  // Filter items by selected category
+  const filteredItems = useMemo(() => {
+    if (filterCategory === 'all') return items;
+    return items.filter(i => i.category.toLowerCase() === filterCategory.toLowerCase());
+  }, [items, filterCategory]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -69,24 +97,29 @@ function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode:
     canvas.width = width;
     canvas.height = height;
 
-    // Initialize nodes
-    const nodes = items.map(item => ({
-      ...item,
-      x: width / 2 + (Math.random() - 0.5) * 200,
-      y: height / 2 + (Math.random() - 0.5) * 200,
-      vx: 0,
-      vy: 0,
-      radius: 6 + Math.min(item.size / 2000, 10),
-      color: getCategoryColor(item.category)
-    }));
+    // Reset view position to center
+    transformRef.current = { x: width / 2, y: height / 2, k: 0.95 };
 
-    // Create edges between nodes of same category
+    // Initialize nodes
+    const nodes = filteredItems.map((item, idx) => {
+      const angle = (idx / Math.max(1, filteredItems.length)) * Math.PI * 2;
+      const dist = 60 + Math.random() * 120;
+      return {
+        ...item,
+        x: Math.cos(angle) * dist,
+        y: Math.sin(angle) * dist,
+        vx: (Math.random() - 0.5) * 2,
+        vy: (Math.random() - 0.5) * 2,
+        radius: 7 + Math.min(item.size / 1500, 12),
+        color: getCategoryColor(item.category)
+      };
+    });
+
+    // Create clustering edges (connect nodes in same category)
     const edges: { source: any, target: any }[] = [];
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         if (nodes[i].category === nodes[j].category) {
-          // Limit connections to avoid dense clumps
-          if (Math.random() > 0.5) continue;
           edges.push({ source: nodes[i], target: nodes[j] });
         }
       }
@@ -94,55 +127,58 @@ function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode:
 
     let animationFrameId: number;
     let dragNode: any = null;
-    let transform = { x: 0, y: 0, k: 1 };
     let isDraggingCanvas = false;
     let lastMouse = { x: 0, y: 0 };
+    let dragDistance = 0;
 
     const simulate = () => {
-      // Simple force directed layout
-      const alpha = 0.05; // Learning rate/cooling
+      const alpha = 0.04;
 
-      // 1. Repulsion
+      // 1. Node Repulsion
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const dx = nodes[j].x - nodes[i].x;
           const dy = nodes[j].y - nodes[i].y;
           let dist = Math.sqrt(dx * dx + dy * dy);
           if (dist === 0) dist = 0.01;
-          const force = -200 / (dist * dist);
-          const fx = (dx / dist) * force;
-          const fy = (dy / dist) * force;
-          nodes[i].vx -= fx;
-          nodes[i].vy -= fy;
-          nodes[j].vx += fx;
-          nodes[j].vy += fy;
+          const minDist = nodes[i].radius + nodes[j].radius + 30;
+          if (dist < minDist * 2.5) {
+            const force = -280 / (dist * dist);
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+            nodes[i].vx -= fx;
+            nodes[i].vy -= fy;
+            nodes[j].vx += fx;
+            nodes[j].vy += fy;
+          }
         }
       }
 
-      // 2. Attraction (Edges)
+      // 2. Intra-category edge attraction
       edges.forEach(edge => {
         const dx = edge.target.x - edge.source.x;
         const dy = edge.target.y - edge.source.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const force = (dist - 50) * 0.02; // desired distance 50
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
+        const desiredDist = 70;
+        const force = (dist - desiredDist) * 0.012;
+        const fx = (dx / (dist || 1)) * force;
+        const fy = (dy / (dist || 1)) * force;
         edge.source.vx += fx;
         edge.source.vy += fy;
         edge.target.vx -= fx;
         edge.target.vy -= fy;
       });
 
-      // 3. Center Gravity
+      // 3. Center Gravity Pull
       nodes.forEach(node => {
-        const dx = width / 2 - node.x;
-        const dy = height / 2 - node.y;
-        node.vx += dx * 0.005;
-        node.vy += dy * 0.005;
+        const dist = Math.sqrt(node.x * node.x + node.y * node.y);
+        node.vx -= (node.x / (dist || 1)) * 0.08;
+        node.vy -= (node.y / (dist || 1)) * 0.08;
 
-        // Apply velocity
-        node.vx *= 0.85; // friction
-        node.vy *= 0.85;
+        // Friction damping
+        node.vx *= 0.88;
+        node.vy *= 0.88;
+
         if (node !== dragNode) {
           node.x += node.vx * alpha * 10;
           node.y += node.vy * alpha * 10;
@@ -153,45 +189,76 @@ function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode:
     const draw = () => {
       ctx.clearRect(0, 0, width, height);
       ctx.save();
-      ctx.translate(transform.x, transform.y);
-      ctx.scale(transform.k, transform.k);
 
-      // Draw edges
-      ctx.lineWidth = 0.5;
+      const { x, y, k } = transformRef.current;
+      ctx.translate(x, y);
+      ctx.scale(k, k);
+
+      // Draw faint background coordinate grid
+      ctx.strokeStyle = 'rgba(30, 58, 138, 0.08)';
+      ctx.lineWidth = 1 / k;
+      const gridSize = 60;
+      const bound = 800;
+      for (let gx = -bound; gx <= bound; gx += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(gx, -bound);
+        ctx.lineTo(gx, bound);
+        ctx.stroke();
+      }
+      for (let gy = -bound; gy <= bound; gy += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(-bound, gy);
+        ctx.lineTo(bound, gy);
+        ctx.stroke();
+      }
+
+      // Draw Edges with glowing gradient
       edges.forEach(edge => {
         ctx.beginPath();
         ctx.moveTo(edge.source.x, edge.source.y);
         ctx.lineTo(edge.target.x, edge.target.y);
-        ctx.strokeStyle = edge.source.color + '40'; // 25% opacity
+        ctx.strokeStyle = `${edge.source.color}35`; // 20% opacity
+        ctx.lineWidth = 1.2 / k;
         ctx.stroke();
       });
 
-      // Draw nodes
+      // Draw Nodes
       nodes.forEach(node => {
-        // Glow
-        const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.radius * 2.5);
-        gradient.addColorStop(0, node.color + '80');
+        const isMatch = searchQuery === '' || 
+          node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          node.category.toLowerCase().includes(searchQuery.toLowerCase());
+
+        const opacity = isMatch ? 1.0 : 0.2;
+
+        // Outer glow halo
+        const glowRadius = node.radius * (isMatch ? 2.8 : 1.5);
+        const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, glowRadius);
+        gradient.addColorStop(0, `${node.color}${Math.floor(opacity * 120).toString(16).padStart(2, '0')}`);
         gradient.addColorStop(1, 'transparent');
         ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius * 2.5, 0, Math.PI * 2);
+        ctx.arc(node.x, node.y, glowRadius, 0, Math.PI * 2);
         ctx.fillStyle = gradient;
         ctx.fill();
 
-        // Core
+        // Solid Node Core
         ctx.beginPath();
         ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
         ctx.fillStyle = node.color;
+        ctx.globalAlpha = opacity;
         ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1;
+
+        // White border
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = (node === dragNode ? 2.5 : 1.2) / k;
         ctx.stroke();
+        ctx.globalAlpha = 1.0;
 
         // Label
-        if (transform.k > 0.5 || node === dragNode || node.radius > 8) {
-          ctx.font = '10px monospace';
-          ctx.fillStyle = '#cbd5e1';
-          const label = node.name.length > 15 ? node.name.substring(0, 12) + '...' : node.name;
-          ctx.fillText(label, node.x + node.radius + 4, node.y + 3);
+        if (k > 0.55 || node === dragNode || isMatch) {
+          ctx.font = 'bold 10px monospace';
+          ctx.fillStyle = isMatch ? '#f8fafc' : '#64748b';
+          const label = node.name.length > 20 ? node.name.substring(0, 18) + '…' : node.name;
+          ctx.fillText(label, node.x + node.radius + 5, node.y + 3);
         }
       });
 
@@ -205,58 +272,75 @@ function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode:
     };
     loop();
 
-    // Interaction handlers
-    const getMousePos = (e: MouseEvent) => {
+    // Mouse Interaction
+    const getGraphPos = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
+      const { x, y, k } = transformRef.current;
       return {
-        x: (e.clientX - rect.left - transform.x) / transform.k,
-        y: (e.clientY - rect.top - transform.y) / transform.k,
-        rawX: e.clientX,
-        rawY: e.clientY
+        x: (clientX - rect.left - x) / k,
+        y: (clientY - rect.top - y) / k,
+        rawX: clientX,
+        rawY: clientY
       };
     };
 
     const handleMouseDown = (e: MouseEvent) => {
-      const pos = getMousePos(e);
-      lastMouse = { x: pos.rawX, y: pos.rawY };
-      
-      let clickedNode = null;
+      const pos = getGraphPos(e.clientX, e.clientY);
+      lastMouse = { x: e.clientX, y: e.clientY };
+      dragDistance = 0;
+
+      let hitNode = null;
       for (let i = nodes.length - 1; i >= 0; i--) {
-        const node = nodes[i];
-        const dx = node.x - pos.x;
-        const dy = node.y - pos.y;
-        if (dx * dx + dy * dy < (node.radius + 5) * (node.radius + 5)) {
-          clickedNode = node;
+        const n = nodes[i];
+        const dx = n.x - pos.x;
+        const dy = n.y - pos.y;
+        if (dx * dx + dy * dy <= (n.radius + 6) * (n.radius + 6)) {
+          hitNode = n;
           break;
         }
       }
 
-      if (clickedNode) {
-        dragNode = clickedNode;
+      if (hitNode) {
+        dragNode = hitNode;
       } else {
         isDraggingCanvas = true;
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      const dx = e.clientX - lastMouse.x;
+      const dy = e.clientY - lastMouse.y;
+      dragDistance += Math.abs(dx) + Math.abs(dy);
+
       if (dragNode) {
-        const pos = getMousePos(e);
+        const pos = getGraphPos(e.clientX, e.clientY);
         dragNode.x = pos.x;
         dragNode.y = pos.y;
         dragNode.vx = 0;
         dragNode.vy = 0;
       } else if (isDraggingCanvas) {
-        const dx = e.clientX - lastMouse.x;
-        const dy = e.clientY - lastMouse.y;
-        transform.x += dx;
-        transform.y += dy;
+        transformRef.current.x += dx;
+        transformRef.current.y += dy;
         lastMouse = { x: e.clientX, y: e.clientY };
+      } else {
+        // Hover detection
+        const pos = getGraphPos(e.clientX, e.clientY);
+        let found = null;
+        for (let i = nodes.length - 1; i >= 0; i--) {
+          const n = nodes[i];
+          const ddx = n.x - pos.x;
+          const ddy = n.y - pos.y;
+          if (ddx * ddx + ddy * ddy <= (n.radius + 6) * (n.radius + 6)) {
+            found = n;
+            break;
+          }
+        }
+        setHoveredNode(found);
       }
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      if (dragNode && !isDraggingCanvas) {
-        // Treat as click if barely moved
+      if (dragNode && dragDistance < 8) {
         onSelectNode(dragNode.relativePath);
       }
       dragNode = null;
@@ -265,21 +349,23 @@ function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode:
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const zoomSensitivity = 0.001;
-      const delta = -e.deltaY * zoomSensitivity;
-      const newScale = Math.max(0.1, Math.min(transform.k * (1 + delta), 5));
-      
-      // Zoom centered on mouse
+      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.88;
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      
-      transform.x = mouseX - (mouseX - transform.x) * (newScale / transform.k);
-      transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.k);
-      transform.k = newScale;
+
+      const { x, y, k } = transformRef.current;
+      const newK = Math.max(0.15, Math.min(4.0, k * zoomFactor));
+
+      transformRef.current = {
+        x: mouseX - (mouseX - x) * (newK / k),
+        y: mouseY - (mouseY - y) * (newK / k),
+        k: newK
+      };
     };
 
     const handleResize = () => {
+      if (!canvas) return;
       width = canvas.clientWidth;
       height = canvas.clientHeight;
       canvas.width = width;
@@ -300,18 +386,102 @@ function ForceGraph({ items, onSelectNode }: { items: VaultItem[], onSelectNode:
       canvas.removeEventListener('wheel', handleWheel);
       window.removeEventListener('resize', handleResize);
     };
-  }, [items, onSelectNode]);
+  }, [filteredItems, onSelectNode, searchQuery]);
+
+  const zoomIn = () => {
+    transformRef.current.k = Math.min(4.0, transformRef.current.k * 1.25);
+  };
+  const zoomOut = () => {
+    transformRef.current.k = Math.max(0.15, transformRef.current.k * 0.8);
+  };
+  const resetView = () => {
+    if (!canvasRef.current) return;
+    transformRef.current = { 
+      x: canvasRef.current.clientWidth / 2, 
+      y: canvasRef.current.clientHeight / 2, 
+      k: 1.0 
+    };
+  };
 
   return (
-    <canvas 
-      ref={canvasRef} 
-      className="w-full h-full cursor-grab active:cursor-grabbing bg-black rounded-2xl" 
-    />
+    <div className="w-full h-full relative bg-[#000000] rounded-2xl overflow-hidden select-none">
+      <canvas 
+        ref={canvasRef} 
+        className="w-full h-full cursor-grab active:cursor-grabbing" 
+      />
+
+      {/* Floating Canvas Controls */}
+      <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-[#070b1e]/90 backdrop-blur-md border border-blue-900/40 rounded-xl p-1.5 z-10 shadow-lg">
+        <button
+          onClick={zoomIn}
+          className="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition"
+          title="Zoom In"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+        <button
+          onClick={zoomOut}
+          className="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition"
+          title="Zoom Out"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+        <button
+          onClick={resetView}
+          className="p-1.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition"
+          title="Reset View"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Bottom Floating Legend / Instructions */}
+      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 bg-[#040716]/90 backdrop-blur-md border border-blue-900/40 rounded-xl px-3.5 py-2 text-[11px] font-mono text-gray-400 z-10 shadow-lg">
+        <div className="flex items-center gap-1.5 text-sky-300 font-bold">
+          <Network className="w-3.5 h-3.5" />
+          <span>2D Note Topology</span>
+        </div>
+        <span>•</span>
+        <div className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-cyan-400" />
+          <span>Chats</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-purple-400" />
+          <span>Notes</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-amber-400" />
+          <span>Goals</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+          <span>Sessions</span>
+        </div>
+        <span>•</span>
+        <span className="text-gray-500">🖱️ Drag node to pin • Click to read</span>
+      </div>
+
+      {/* Hover Node Tooltip */}
+      {hoveredNode && (
+        <div className="absolute top-4 left-4 bg-[#090e24]/95 border border-sky-400/60 rounded-xl p-3 text-xs font-mono text-white shadow-[0_0_20px_rgba(56,189,248,0.3)] pointer-events-none z-20 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center gap-2 mb-1">
+            <span>{getCategoryIcon(hoveredNode.category)}</span>
+            <span className="font-bold text-sky-300 truncate max-w-[200px]">{hoveredNode.name}</span>
+          </div>
+          <div className="text-[10px] text-gray-400 space-y-0.5">
+            <div>Category: <span className="text-purple-300 font-semibold uppercase">{hoveredNode.category}</span></div>
+            <div>Size: {(hoveredNode.size / 1024).toFixed(1)} KB</div>
+            <div>Modified: {new Date(hoveredNode.mtime).toLocaleDateString()}</div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 // ----------------------------------------------------
-// Main Page Component
+// Main Vault Explorer Page
 // ----------------------------------------------------
 export default function VaultExplorerPage() {
   const router = useRouter();
@@ -324,10 +494,11 @@ export default function VaultExplorerPage() {
   const [loadingContent, setLoadingContent] = useState(false);
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'reader' | 'graph'>('reader');
-  
-  // Collapsible categories state
+  const [graphCategoryFilter, setGraphCategoryFilter] = useState('all');
+  const [isFullScreenGraph, setIsFullScreenGraph] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
 
+  // Fetch items from Obsidian API
   const fetchVault = async () => {
     try {
       const res = await fetch('/api/vault');
@@ -362,8 +533,15 @@ export default function VaultExplorerPage() {
     }
   };
 
+  // Check URL query param (?view=graph)
   useEffect(() => {
     fetchVault();
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('view') === 'graph') {
+        setActiveTab('graph');
+      }
+    }
   }, []);
 
   const handleCopyContext = () => {
@@ -373,40 +551,35 @@ export default function VaultExplorerPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const filteredItems = items.filter(
-    item =>
-      item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.category.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const totalSize = items.reduce((acc, item) => acc + item.size, 0);
-  const totalCategories = new Set(items.map(i => i.category)).size;
-
-  const groupedItems = useMemo(() => {
-    const groups: Record<string, VaultItem[]> = {};
-    filteredItems.forEach(item => {
-      const cat = item.category || 'default';
-      if (!groups[cat]) groups[cat] = [];
-      groups[cat].push(item);
-    });
-    return groups;
-  }, [filteredItems]);
+  const handleNodeSelect = (relPath: string) => {
+    loadFile(relPath);
+    setActiveTab('reader');
+    setIsFullScreenGraph(false);
+  };
 
   const toggleCategory = (cat: string) => {
     setExpandedCategories(prev => ({
       ...prev,
-      [cat]: prev[cat] === false ? true : false
+      [cat]: !prev[cat]
     }));
   };
 
-  const handleNodeSelect = (relPath: string) => {
-    setActiveTab('reader');
-    loadFile(relPath);
-  };
+  // Grouped items
+  const groupedItems = useMemo(() => {
+    const map: Record<string, VaultItem[]> = {};
+    items.forEach(item => {
+      const cat = item.category || 'notes';
+      if (!map[cat]) map[cat] = [];
+      map[cat].push(item);
+    });
+    return map;
+  }, [items]);
+
+  const categories = Object.keys(groupedItems);
 
   return (
-    <div className="min-h-screen bg-black text-gray-100 flex flex-col font-sans">
-      {/* Header */}
+    <div className="min-h-screen bg-black text-gray-100 flex flex-col font-sans select-none">
+      {/* Top Header */}
       <header className="px-6 py-4 border-b border-blue-950/60 bg-[#02040a]/90 backdrop-blur-md flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-4">
           <Link
@@ -435,51 +608,66 @@ export default function VaultExplorerPage() {
         </div>
 
         {/* View Mode Tab Switcher */}
-        <div className="flex items-center bg-[#090e1f] rounded-lg p-1 border border-blue-900/40 mx-4">
+        <div className="flex items-center bg-[#090e1f] rounded-xl p-1 border border-blue-900/40 mx-4">
           <button
-            onClick={() => setActiveTab('reader')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            onClick={() => { setActiveTab('reader'); setIsFullScreenGraph(false); }}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all font-mono ${
               activeTab === 'reader' 
-                ? 'bg-blue-950/80 text-white shadow-sm' 
+                ? 'bg-blue-600 text-white shadow-[0_0_12px_rgba(37,99,235,0.4)]' 
                 : 'text-gray-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            📄 Reader
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>Reader Mode</span>
           </button>
           <button
             onClick={() => setActiveTab('graph')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all font-mono ${
               activeTab === 'graph' 
-                ? 'bg-purple-950/80 text-white shadow-sm' 
+                ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)]' 
                 : 'text-gray-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            🕸️ Graph View
+            <Network className="w-3.5 h-3.5 text-purple-300" />
+            <span>2D Graph View</span>
           </button>
-          <button
-            onClick={() => router.push('/globe')}
-            className="px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 text-gray-400 hover:text-sky-300 hover:bg-white/5 transition-all"
+          <Link
+            href="/globe"
+            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 text-sky-400 hover:text-white hover:bg-white/5 transition-all font-mono"
+            title="Launch 3D Ultron Globe & Hand Gestures"
           >
-            🌐 3D Globe
-          </button>
+            <Globe className="w-3.5 h-3.5" />
+            <span>3D Vault Globe</span>
+          </Link>
         </div>
 
-        {/* Header Right */}
+        {/* Header Right Actions */}
         <div className="flex items-center gap-3">
+          {activeTab === 'graph' && (
+            <button
+              onClick={() => setIsFullScreenGraph(!isFullScreenGraph)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#090e1f] border border-purple-800/40 text-purple-300 hover:text-white text-xs font-mono transition-all"
+              title={isFullScreenGraph ? 'Exit Fullscreen' : 'Expand to Fullscreen Graph'}
+            >
+              {isFullScreenGraph ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              <span>{isFullScreenGraph ? 'Split View' : 'Fullscreen'}</span>
+            </button>
+          )}
+
           {selectedFile && activeTab === 'reader' && (
             <button
               onClick={handleCopyContext}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/60 border border-purple-700/50 text-purple-300 hover:border-purple-400 text-xs font-mono transition-all"
-              title="Copy markdown to clipboard to feed into agent"
+              title="Copy markdown to clipboard"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? 'Copied' : 'Copy Content'}</span>
+              <span>{copied ? 'Copied!' : 'Copy Context'}</span>
             </button>
           )}
 
           <Link
             href="/agents/claude"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-all font-mono"
           >
             <MessageSquare className="w-3.5 h-3.5" />
             <span>Open in Claude</span>
@@ -487,82 +675,124 @@ export default function VaultExplorerPage() {
         </div>
       </header>
 
-      {/* Main Split Body */}
+      {/* Main Container */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 md:grid-cols-12 gap-6">
-        
-        {/* Left Sidebar: Enhanced File List (3 or 4 cols) */}
-        <div className="md:col-span-4 flex flex-col gap-4">
-          <div className="flex items-center justify-between text-xs font-mono text-gray-400 bg-[#050711] border border-blue-900/30 p-2 rounded-lg">
-            <span>{items.length} notes</span>
-            <span>{totalCategories} categories</span>
-            <span>{(totalSize / 1024 / 1024).toFixed(2)} MB</span>
-          </div>
+        {/* Left Sidebar: File List (Hidden in Fullscreen Graph Mode) */}
+        {!isFullScreenGraph && (
+          <div className="md:col-span-4 flex flex-col gap-4">
+            {/* Search Box */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-gray-500 absolute left-3 top-3" />
+              <input
+                type="text"
+                placeholder="Search notes or memories..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#050711] border border-blue-900/50 text-white placeholder-gray-500 text-xs font-mono focus:outline-none focus:border-blue-500"
+              />
+            </div>
 
-          <div className="relative">
-            <Search className="w-4 h-4 text-gray-500 absolute left-3 top-3" />
-            <input
-              type="text"
-              placeholder="Search notes or chats..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#050711] border border-blue-900/50 text-white placeholder-gray-500 text-xs font-mono focus:outline-none focus:border-blue-500"
-            />
-          </div>
+            {/* Mini Stat Bar */}
+            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#050711] border border-blue-950/80 text-[11px] font-mono text-gray-400">
+              <span>{items.length} notes</span>
+              <span>{categories.length} categories</span>
+              <span>{(items.reduce((acc, i) => acc + i.size, 0) / 1024 / 1024).toFixed(2)} MB</span>
+            </div>
 
-          <div className="flex-1 bg-[#050711] border border-blue-950/80 rounded-2xl p-3 overflow-y-auto max-h-[70vh] space-y-3">
-            {loading ? (
-              <div className="text-center py-8 text-xs font-mono text-gray-500">Scanning vault...</div>
-            ) : filteredItems.length === 0 ? (
-              <div className="text-center py-8 text-xs font-mono text-gray-500">No notes found.</div>
-            ) : (
-              Object.entries(groupedItems).map(([category, catItems]) => {
-                const isExpanded = expandedCategories[category] !== false; // Default true
-                return (
-                  <div key={category} className="space-y-1">
-                    <button
-                      onClick={() => toggleCategory(category)}
-                      className="w-full flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-white py-1 px-1 transition-colors uppercase tracking-wider"
-                    >
-                      {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                      <span className="text-sm">{getCategoryIcon(category)}</span>
-                      <span>{category} ({catItems.length})</span>
-                    </button>
-                    
-                    {isExpanded && (
-                      <div className="space-y-1 pl-1">
-                        {catItems.map((item) => (
-                          <button
-                            key={item.relativePath}
-                            onClick={() => loadFile(item.relativePath)}
-                            className={`w-full p-2.5 rounded-xl text-left border transition-all ${
-                              selectedFile === item.relativePath
-                                ? 'bg-purple-950/60 border-purple-500/70 text-white shadow-[0_0_12px_rgba(168,85,247,0.3)]'
-                                : 'bg-[#090e1f] border-blue-950/60 text-gray-300 hover:border-blue-900'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-medium truncate flex items-center gap-1.5">
-                                <FileText className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" style={{color: getCategoryColor(item.category)}} />
-                                {item.name}
-                              </span>
-                            </div>
-                            <div className="text-[10px] font-mono text-gray-500 mt-1 flex items-center justify-between">
-                              <span>{new Date(item.mtime).toLocaleDateString()}</span>
-                              <span>{(item.size / 1024).toFixed(1)} KB</span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
+            {/* Category Filter for Graph Mode */}
+            {activeTab === 'graph' && (
+              <div className="flex flex-wrap gap-1.5 p-2 rounded-xl bg-[#050711] border border-purple-900/40">
+                <button
+                  onClick={() => setGraphCategoryFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold transition ${
+                    graphCategoryFilter === 'all'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-black/50 text-gray-400 hover:text-white'
+                  }`}
+                >
+                  All ({items.length})
+                </button>
+                {categories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setGraphCategoryFilter(cat)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold flex items-center gap-1 transition ${
+                      graphCategoryFilter === cat
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-black/50 text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    <span>{getCategoryIcon(cat)}</span>
+                    <span className="uppercase">{cat}</span>
+                    <span>({groupedItems[cat]?.length || 0})</span>
+                  </button>
+                ))}
+              </div>
             )}
-          </div>
-        </div>
 
-        {/* Right Pane: Markdown Reader or Graph View (8 cols) */}
-        <div className="md:col-span-8 bg-[#050711] border border-blue-900/40 rounded-2xl overflow-hidden flex flex-col h-[75vh]">
+            {/* Collapsible File List */}
+            <div className="flex-1 bg-[#050711] border border-blue-950/80 rounded-2xl p-3 overflow-y-auto max-h-[70vh] space-y-3">
+              {loading ? (
+                <div className="text-center py-8 text-xs font-mono text-gray-500">Scanning vault...</div>
+              ) : items.length === 0 ? (
+                <div className="text-center py-8 text-xs font-mono text-gray-500">No notes found.</div>
+              ) : (
+                categories.map(cat => {
+                  const catItems = groupedItems[cat] || [];
+                  const isExpanded = expandedCategories[cat] !== false;
+                  return (
+                    <div key={cat} className="space-y-1">
+                      <button
+                        onClick={() => toggleCategory(cat)}
+                        className="w-full flex items-center justify-between p-1.5 text-xs font-mono font-bold text-gray-300 hover:text-white transition"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
+                          <span>{getCategoryIcon(cat)}</span>
+                          <span className="uppercase tracking-wider">{cat}</span>
+                          <span className="text-[10px] text-gray-500 font-normal">({catItems.length})</span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="space-y-1 pl-2">
+                          {catItems.map(item => (
+                            <button
+                              key={item.relativePath}
+                              onClick={() => {
+                                loadFile(item.relativePath);
+                                setActiveTab('reader');
+                              }}
+                              className={`w-full p-2 rounded-xl text-left border transition-all ${
+                                selectedFile === item.relativePath
+                                  ? 'bg-purple-950/60 border-purple-500/70 text-white shadow-[0_0_12px_rgba(168,85,247,0.2)]'
+                                  : 'bg-[#090e1f] border-blue-950/60 text-gray-300 hover:border-blue-900'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium truncate flex items-center gap-1.5">
+                                  <FileText className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" style={{color: getCategoryColor(item.category)}} />
+                                  {item.name}
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-mono text-gray-500 mt-1 flex items-center justify-between">
+                                <span>{new Date(item.mtime).toLocaleDateString()}</span>
+                                <span>{(item.size / 1024).toFixed(1)} KB</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Right Pane: Markdown Reader or Graph View */}
+        <div className={`${isFullScreenGraph ? 'md:col-span-12' : 'md:col-span-8'} bg-[#050711] border border-blue-900/40 rounded-2xl overflow-hidden flex flex-col h-[75vh]`}>
           {activeTab === 'reader' ? (
             <div className="flex flex-col h-full p-6">
               <div className="flex items-center justify-between pb-4 border-b border-blue-950/80 mb-4">
@@ -577,7 +807,7 @@ export default function VaultExplorerPage() {
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto pr-4 custom-scrollbar text-sm">
+              <div className="flex-1 overflow-y-auto pr-4 text-sm select-text">
                 {loadingContent ? (
                   <div className="text-center py-12 text-gray-500 text-xs font-mono">Loading note content...</div>
                 ) : fileContent ? (
@@ -615,19 +845,18 @@ export default function VaultExplorerPage() {
                   </div>
                 ) : (
                   <div className="text-center py-12 text-gray-500 text-xs font-mono">
-                    Select a file from the sidebar to inspect its contents.
+                    Select a note from the left to view.
                   </div>
                 )}
               </div>
             </div>
           ) : (
-            <div className="w-full h-full relative">
-              <div className="absolute top-4 left-4 z-10 text-xs font-mono text-gray-400 bg-black/50 p-2 rounded-lg border border-white/10 backdrop-blur-sm pointer-events-none">
-                <p>Scroll to zoom, drag to pan.</p>
-                <p>Click node to read.</p>
-              </div>
-              <ForceGraph items={items} onSelectNode={handleNodeSelect} />
-            </div>
+            <ForceGraph 
+              items={items} 
+              onSelectNode={handleNodeSelect}
+              searchQuery={search}
+              filterCategory={graphCategoryFilter}
+            />
           )}
         </div>
       </div>
