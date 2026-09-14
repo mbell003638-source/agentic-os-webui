@@ -1,16 +1,26 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { 
   ArrowLeft, 
   Globe, 
   RotateCw, 
   ZoomIn, 
   ZoomOut, 
-  Activity
+  Activity,
+  Hand,
+  Sparkles,
+  Camera,
+  CameraOff,
+  Maximize2,
+  RefreshCw
 } from 'lucide-react';
+import { HandTracker, GestureState } from '@/lib/handTracker';
 
 interface AgentNodeData {
   id: string;
@@ -24,8 +34,16 @@ interface AgentNodeData {
 
 export default function GlobePage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  
   const [autoRotate, setAutoRotate] = useState(true);
   const [voiceResonance, setVoiceResonance] = useState(true);
+  const [bloomEnabled, setBloomEnabled] = useState(true);
+  const [gesturesEnabled, setGesturesEnabled] = useState(false);
+  const [gestureStatus, setGestureStatus] = useState<string>('Standby');
+  const [activeGesture, setActiveGesture] = useState<GestureState | null>(null);
+  const [isCameraStarting, setIsCameraStarting] = useState(false);
+
   const [selectedItem, setSelectedItem] = useState<{
     type: 'agent' | 'memory' | 'core';
     title: string;
@@ -43,6 +61,7 @@ export default function GlobePage() {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const composerRef = useRef<EffectComposer | null>(null);
   const coreGroupRef = useRef<THREE.Group | null>(null);
   const agentsGroupRef = useRef<THREE.Group | null>(null);
   const memoriesPointsRef = useRef<THREE.Points | null>(null);
@@ -50,11 +69,14 @@ export default function GlobePage() {
   const connectionsRef = useRef<THREE.LineSegments | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
 
-  // Mouse interaction refs
+  // Mouse & Gesture interaction refs
   const isDraggingRef = useRef(false);
   const previousMousePositionRef = useRef({ x: 0, y: 0 });
   const rotationVelocityRef = useRef({ x: 0, y: 0.002 });
   const zoomLevelRef = useRef(380);
+
+  // Hand tracker instance
+  const trackerRef = useRef<HandTracker | null>(null);
 
   // Agent definitions
   const DEFAULT_AGENTS: AgentNodeData[] = [
@@ -104,7 +126,111 @@ export default function GlobePage() {
     loadData();
   }, []);
 
-  // Initialize Three.js Scene
+  // Hand tracking state callback
+  const handleGestureFrame = useCallback((state: GestureState) => {
+    setActiveGesture(state);
+
+    if (state.handsDetected === 0) {
+      setGestureStatus('Searching for hands...');
+      return;
+    }
+
+    if (state.isDualPinching) {
+      setGestureStatus('Dual Pinch Detected — Zooming');
+      zoomLevelRef.current = Math.max(180, Math.min(650, zoomLevelRef.current - state.zoomDelta * 60));
+    } else if (state.isPinching) {
+      setGestureStatus('Pinch Active — Orbiting Globe');
+      if (memoriesPointsRef.current) {
+        memoriesPointsRef.current.rotation.y += state.pinchDeltaX * 0.05;
+        memoriesPointsRef.current.rotation.x += state.pinchDeltaY * 0.05;
+      }
+      if (agentsGroupRef.current) {
+        agentsGroupRef.current.rotation.y += state.pinchDeltaX * 0.05;
+      }
+      if (connectionsRef.current) {
+        connectionsRef.current.rotation.y += state.pinchDeltaX * 0.05;
+      }
+      rotationVelocityRef.current = {
+        x: state.pinchDeltaY * 0.015,
+        y: state.pinchDeltaX * 0.015
+      };
+    } else {
+      setGestureStatus(`${state.handsDetected} Hand${state.handsDetected > 1 ? 's' : ''} Ready (Pinch to grab & spin)`);
+    }
+  }, []);
+
+  // Start / Stop Hand Gesture Tracking
+  const toggleGestures = async () => {
+    if (gesturesEnabled) {
+      if (trackerRef.current) {
+        trackerRef.current.stop();
+      }
+      setGesturesEnabled(false);
+      setGestureStatus('Standby');
+      setActiveGesture(null);
+      return;
+    }
+
+    if (!videoRef.current) return;
+
+    setIsCameraStarting(true);
+    setGestureStatus('Initializing MediaPipe AI vision...');
+
+    try {
+      if (!trackerRef.current) {
+        trackerRef.current = new HandTracker();
+      }
+      await trackerRef.current.start(videoRef.current, handleGestureFrame);
+      setGesturesEnabled(true);
+      setGestureStatus('Webcam active — raise hand to control');
+    } catch (err: any) {
+      console.error('Hand tracking error:', err);
+      setGestureStatus(`Error: ${err.message || 'Camera permission denied'}`);
+      setGesturesEnabled(false);
+    } finally {
+      setIsCameraStarting(false);
+    }
+  };
+
+  // Reset Camera View
+  const resetView = () => {
+    zoomLevelRef.current = 380;
+    if (cameraRef.current) {
+      cameraRef.current.position.set(0, 0, 380);
+      cameraRef.current.lookAt(0, 0, 0);
+    }
+    if (memoriesPointsRef.current) {
+      memoriesPointsRef.current.rotation.set(0, 0, 0);
+    }
+    rotationVelocityRef.current = { x: 0, y: 0.002 };
+  };
+
+  // Global Keyboard Shortcuts (G: Gesture, B: Bloom, R: Reset)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'g' || e.key === 'G') {
+        toggleGestures();
+      } else if (e.key === 'b' || e.key === 'B') {
+        setBloomEnabled(prev => !prev);
+      } else if (e.key === 'r' || e.key === 'R') {
+        resetView();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gesturesEnabled]);
+
+  // Cleanup hand tracker on unmount
+  useEffect(() => {
+    return () => {
+      if (trackerRef.current) {
+        trackerRef.current.destroy();
+      }
+    };
+  }, []);
+
+  // Initialize Three.js Scene + Postprocessing Bloom
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -131,7 +257,26 @@ export default function GlobePage() {
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // 4. Center Holographic Geodesic Core (Ultron / JARVIS Architecture)
+    // 4. Postprocessing Bloom Composer (Ultron Holographic Glow)
+    try {
+      const composer = new EffectComposer(renderer);
+      const renderPass = new RenderPass(scene, camera);
+      composer.addPass(renderPass);
+
+      const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(width, height),
+        1.15, // strength
+        0.45, // radius
+        0.14  // threshold
+      );
+      composer.addPass(bloomPass);
+      composerRef.current = composer;
+    } catch (e) {
+      console.warn('Postprocessing bloom fallback to raw WebGL:', e);
+      composerRef.current = null;
+    }
+
+    // 5. Center Holographic Geodesic Core (Ultron / JARVIS Architecture)
     const coreGroup = new THREE.Group();
     scene.add(coreGroup);
     coreGroupRef.current = coreGroup;
@@ -142,7 +287,7 @@ export default function GlobePage() {
       color: 0x00f0ff,
       wireframe: true,
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.32,
     });
     const outerIcosa = new THREE.Mesh(outerIcosaGeo, outerIcosaMat);
     coreGroup.add(outerIcosa);
@@ -153,7 +298,7 @@ export default function GlobePage() {
       color: 0x3b82f6,
       wireframe: true,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.48,
     });
     const midDodeca = new THREE.Mesh(midDodecaGeo, midDodecaMat);
     coreGroup.add(midDodeca);
@@ -164,12 +309,12 @@ export default function GlobePage() {
       color: 0x60a5fa,
       wireframe: true,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.75,
     });
     const innerCore = new THREE.Mesh(innerGeo, innerMat);
     coreGroup.add(innerCore);
 
-    // 5. Obsidian Memory Vault Point Cloud (Fibonacci Sphere Distribution)
+    // 6. Obsidian Memory Vault Point Cloud (Fibonacci Sphere Distribution)
     const particleCount = 2800;
     const pointsGeo = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
@@ -194,7 +339,7 @@ export default function GlobePage() {
       const randType = Math.random();
       if (randType > 0.85) {
         colors[i * 3] = 0.0;
-        colors[i * 3 + 1] = 0.94;
+        colors[i * 3 + 1] = 0.95;
         colors[i * 3 + 2] = 1.0;
       } else if (randType > 0.65) {
         colors[i * 3] = 0.75;
@@ -214,7 +359,7 @@ export default function GlobePage() {
     pointsGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     pointsGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    // High quality canvas circular sprite texture for points
+    // High quality circular sprite texture
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
@@ -233,7 +378,7 @@ export default function GlobePage() {
       map: pointTexture,
       vertexColors: true,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.88,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -242,7 +387,7 @@ export default function GlobePage() {
     scene.add(memoriesPoints);
     memoriesPointsRef.current = memoriesPoints;
 
-    // 6. Orbital Rings
+    // 7. Orbital Rings
     const ringsGroup = new THREE.Group();
     scene.add(ringsGroup);
     orbitalRingsRef.current = ringsGroup;
@@ -269,11 +414,11 @@ export default function GlobePage() {
       return line;
     };
 
-    ringsGroup.add(createOrbitRing(165, Math.PI / 2.2, 0.2, 0x0284c7, 0.35));
-    ringsGroup.add(createOrbitRing(175, Math.PI / 3.5, 0.4, 0x38bdf8, 0.25));
-    ringsGroup.add(createOrbitRing(185, -Math.PI / 4, 0.1, 0x818cf8, 0.2));
+    ringsGroup.add(createOrbitRing(165, Math.PI / 2.2, 0.2, 0x0284c7, 0.4));
+    ringsGroup.add(createOrbitRing(175, Math.PI / 3.5, 0.4, 0x38bdf8, 0.3));
+    ringsGroup.add(createOrbitRing(185, -Math.PI / 4, 0.1, 0x818cf8, 0.25));
 
-    // 7. Agent Satellite Hubs in Orbit
+    // 8. Agent Satellite Hubs in Orbit
     const agentsGroup = new THREE.Group();
     scene.add(agentsGroup);
     agentsGroupRef.current = agentsGroup;
@@ -303,7 +448,7 @@ export default function GlobePage() {
         color: ag.color,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.75,
       });
       const ringGlow = new THREE.Mesh(ringGlowGeo, ringGlowMat);
       ringGlow.lookAt(0, 0, 0);
@@ -313,7 +458,7 @@ export default function GlobePage() {
       agentMeshes.push(mesh);
     });
 
-    // 8. Dynamic Neural Connection Beams
+    // 9. Dynamic Neural Connection Beams
     const linePositions: number[] = [];
     currentAgents.forEach((ag, idx) => {
       const angle = (idx / currentAgents.length) * Math.PI * 2;
@@ -339,7 +484,7 @@ export default function GlobePage() {
     const connMat = new THREE.LineBasicMaterial({
       color: 0x0284c7,
       transparent: true,
-      opacity: 0.4,
+      opacity: 0.45,
       blending: THREE.AdditiveBlending,
     });
     const connections = new THREE.LineSegments(connGeo, connMat);
@@ -450,7 +595,12 @@ export default function GlobePage() {
 
       camera.position.z += (zoomLevelRef.current - camera.position.z) * 0.1;
 
-      renderer.render(scene, camera);
+      // Render with bloom composer if enabled, else plain renderer
+      if (bloomEnabled && composerRef.current) {
+        composerRef.current.render();
+      } else {
+        renderer.render(scene, camera);
+      }
     };
 
     animate();
@@ -462,6 +612,9 @@ export default function GlobePage() {
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
       renderer.setSize(newW, newH);
+      if (composerRef.current) {
+        composerRef.current.setSize(newW, newH);
+      }
     };
     window.addEventListener('resize', handleResize);
 
@@ -475,7 +628,7 @@ export default function GlobePage() {
       outerIcosaGeo.dispose();
       outerIcosaMat.dispose();
     };
-  }, [agentsList, autoRotate, voiceResonance]);
+  }, [agentsList, autoRotate, voiceResonance, bloomEnabled]);
 
   // Mouse Drag / Orbit Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -517,6 +670,14 @@ export default function GlobePage() {
 
   return (
     <div className="flex flex-col h-screen max-h-screen bg-black text-gray-100 overflow-hidden font-sans select-none">
+      {/* Hidden/Live Video Element for MediaPipe Hand Tracking */}
+      <video
+        ref={videoRef}
+        className="hidden"
+        playsInline
+        muted
+      />
+
       {/* Top Header Bar */}
       <header className="flex-none px-6 py-4 border-b border-blue-950/60 bg-[#02040a]/90 backdrop-blur-md flex items-center justify-between z-20">
         <div className="flex items-center gap-4">
@@ -538,22 +699,55 @@ export default function GlobePage() {
                   Obsidian 3D Vault & Hive Mind Globe
                 </h1>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-400 border border-cyan-800/40 uppercase">
-                  THREE.JS WEBGL CORE
+                  ULTRON / JARVIS CORE
                 </span>
               </div>
               <p className="text-xs text-gray-400 font-mono">
-                {stats.agents} Swarm Agents • {stats.nodesTotal.toLocaleString()} Knowledge Points • Fullstack Ultron Engine
+                {stats.agents} Swarm Agents • {stats.nodesTotal.toLocaleString()} Knowledge Points • Fullstack MediaPipe Gestures
               </p>
             </div>
           </div>
         </div>
 
         {/* Right Action Controls */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          {/* Hand Gestures Toggle Button */}
+          <button
+            onClick={toggleGestures}
+            disabled={isCameraStarting}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-mono font-semibold border transition-all ${
+              gesturesEnabled
+                ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.4)] animate-pulse'
+                : 'bg-[#090e1f] text-gray-300 hover:text-white border-blue-900/60 hover:border-emerald-500/60'
+            }`}
+            title="Toggle webcam hand gesture interaction (Hotkey: G)"
+          >
+            {gesturesEnabled ? (
+              <Hand className="w-4 h-4 text-emerald-400 animate-bounce" />
+            ) : (
+              <Camera className="w-4 h-4 text-sky-400" />
+            )}
+            <span>{isCameraStarting ? 'Starting AI...' : gesturesEnabled ? 'Gestures Active [G]' : 'Hand Gestures [G]'}</span>
+          </button>
+
+          {/* Holographic Bloom Toggle */}
+          <button
+            onClick={() => setBloomEnabled(!bloomEnabled)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono border transition-all ${
+              bloomEnabled
+                ? 'bg-purple-950/80 text-purple-300 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.35)]'
+                : 'bg-[#090e1f] text-gray-400 border-blue-950/80'
+            }`}
+            title="Toggle Three.js UnrealBloom holographic post-processing (Hotkey: B)"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${bloomEnabled ? 'text-purple-400' : 'text-gray-500'}`} />
+            <span>Bloom {bloomEnabled ? 'ON' : 'OFF'} [B]</span>
+          </button>
+
           {/* JARVIS / Ultron Voice Resonance Toggle */}
           <button
             onClick={() => setVoiceResonance(!voiceResonance)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono border transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono border transition-all ${
               voiceResonance
                 ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.4)]'
                 : 'bg-[#090e1f] text-gray-400 border-blue-950/80'
@@ -567,7 +761,7 @@ export default function GlobePage() {
           {/* Auto Rotate Button */}
           <button
             onClick={() => setAutoRotate(!autoRotate)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono border transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono border transition-all ${
               autoRotate 
                 ? 'bg-blue-950/90 text-sky-300 border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.3)]' 
                 : 'bg-[#090e1f] text-gray-400 border-blue-950/80'
@@ -576,6 +770,15 @@ export default function GlobePage() {
           >
             <RotateCw className={`w-3.5 h-3.5 ${autoRotate ? 'animate-spin' : ''}`} />
             <span>{autoRotate ? 'Orbiting' : 'Paused'}</span>
+          </button>
+
+          {/* Reset Camera Button */}
+          <button
+            onClick={resetView}
+            className="p-2 rounded-xl bg-[#090e1f] border border-blue-900/40 text-gray-400 hover:text-white hover:border-blue-500/50 transition-all"
+            title="Reset Camera & Rotation (Hotkey: R)"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
 
           {/* Zoom In / Out */}
@@ -608,15 +811,71 @@ export default function GlobePage() {
         className="flex-1 relative w-full h-full bg-[#000000] overflow-hidden cursor-grab active:cursor-grabbing"
       >
         {/* Floating HUD Instructions */}
-        <div className="absolute bottom-6 left-6 flex items-center gap-4 bg-[#040817]/85 backdrop-blur-md border border-blue-900/40 rounded-xl px-4 py-2 text-xs text-gray-400 pointer-events-none shadow-[0_0_25px_rgba(0,0,0,0.8)] font-mono z-10">
-          <span className="text-sky-400">⚡ Three.js WebGL</span>
+        <div className="absolute bottom-6 left-6 flex items-center gap-3 bg-[#040817]/90 backdrop-blur-md border border-blue-900/50 rounded-2xl px-4 py-2.5 text-xs text-gray-300 pointer-events-none shadow-[0_0_25px_rgba(0,0,0,0.8)] font-mono z-10">
+          <span className="text-sky-400 font-bold">⚡ Ultron WebGL</span>
           <span>•</span>
-          <span>🖱️ Drag to rotate</span>
+          <span>🖱️ Mouse: Drag & Scroll</span>
           <span>•</span>
-          <span>🔍 Scroll to zoom</span>
+          <span className="text-emerald-400">✋ Gesture: Pinch = Spin, 2-Hand = Zoom</span>
           <span>•</span>
-          <span>👆 Click node to inspect</span>
+          <span className="text-purple-400">⌨️ G: Hand, B: Bloom, R: Reset</span>
         </div>
+
+        {/* Futuristic Hand Tracking HUD Card (when gestures enabled) */}
+        {gesturesEnabled && (
+          <div className="absolute top-6 left-6 w-80 bg-[#040817]/95 backdrop-blur-md border border-emerald-500/60 rounded-2xl p-4 shadow-[0_0_30px_rgba(16,185,129,0.3)] z-20 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-2.5 border-b border-emerald-950 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                <span className="text-xs font-bold font-mono text-emerald-300 uppercase tracking-wider">
+                  MediaPipe Vision HUD
+                </span>
+              </div>
+              <button
+                onClick={toggleGestures}
+                className="text-gray-400 hover:text-white p-1"
+                title="Stop hand gestures"
+              >
+                <CameraOff className="w-3.5 h-3.5 text-red-400" />
+              </button>
+            </div>
+
+            {/* Gesture Status */}
+            <div className="bg-black/80 rounded-xl p-3 border border-emerald-900/40 mb-3 space-y-2">
+              <div className="text-[11px] font-mono text-gray-300 flex items-center justify-between">
+                <span>Status:</span>
+                <span className="font-bold text-emerald-400 truncate max-w-[180px]">{gestureStatus}</span>
+              </div>
+
+              {/* Hand Detection Badges */}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <div className={`p-2 rounded-lg text-center border font-mono text-[10px] ${
+                  (activeGesture?.handsDetected ?? 0) > 0
+                    ? 'bg-emerald-950/60 border-emerald-500/70 text-emerald-300'
+                    : 'bg-black/50 border-gray-800 text-gray-600'
+                }`}>
+                  ✋ {activeGesture?.handsDetected ?? 0} HAND{(activeGesture?.handsDetected ?? 0) !== 1 ? 'S' : ''}
+                </div>
+
+                <div className={`p-2 rounded-lg text-center border font-mono text-[10px] font-bold ${
+                  activeGesture?.isDualPinching
+                    ? 'bg-cyan-950/80 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.5)]'
+                    : activeGesture?.isPinching
+                    ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                    : 'bg-black/50 border-gray-800 text-gray-600'
+                }`}>
+                  {activeGesture?.isDualPinching ? '🔍 DUAL PINCH (ZOOM)' : activeGesture?.isPinching ? '🤏 PINCH (SPIN)' : 'OPEN PALM'}
+                </div>
+              </div>
+            </div>
+
+            {/* Gestures Guide */}
+            <div className="text-[10px] font-mono text-gray-400 space-y-1">
+              <div>• <strong className="text-emerald-300">Pinch & Move:</strong> grab and orbit the 3D globe</div>
+              <div>• <strong className="text-cyan-300">Two Hands Pinch:</strong> pull apart to zoom in, push to zoom out</div>
+            </div>
+          </div>
+        )}
 
         {/* Floating Node Telemetry Card */}
         {selectedItem && (
