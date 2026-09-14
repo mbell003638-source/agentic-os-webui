@@ -15,7 +15,6 @@ import {
   Zap,
   Smartphone,
   Globe,
-  Plus,
   MessageSquare,
   Trash2
 } from 'lucide-react';
@@ -422,25 +421,8 @@ export default function Sidebar() {
                   {/* Sessions Sub-Tree under the Agent */}
                   {isExpanded && (
                     <div className="ml-3 pl-2.5 border-l border-blue-900/40 space-y-1 py-1">
-                      {/* + New Session Button directly under the agent */}
-                      <button
-                        onClick={() => handleNewSession(agent.id)}
-                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-blue-950/60 hover:bg-blue-900/60 text-sky-300 border border-blue-800/40 hover:border-blue-500 text-[11px] font-mono font-medium transition-all shadow-[0_0_10px_rgba(56,189,248,0.15)] group"
-                        title="Start a new conversation session with this agent"
-                      >
-                        <div className="flex items-center gap-1.5 truncate">
-                          <Plus className="w-3 h-3 text-sky-400 group-hover:scale-110 transition-transform shrink-0" />
-                          <span className="truncate">+ New Session</span>
-                        </div>
-                        <span className="text-[9px] text-gray-500 group-hover:text-sky-300">fresh</span>
-                      </button>
-
-                      {/* Sessions List */}
-                      {agentSessions.length === 0 ? (
-                        <div className="px-2 py-1 text-[10px] font-mono text-gray-600 italic">
-                          No past sessions yet
-                        </div>
-                      ) : (
+                      {/* Past Sessions List (New Session is handled by the tab bar on the chat page) */}
+                      {agentSessions.length > 0 && (
                         <div className="space-y-0.5 max-h-48 overflow-y-auto pr-1">
                           {agentSessions.map((s) => {
                             const isActive = isCurrentAgent && activeSessionId === s.id;
